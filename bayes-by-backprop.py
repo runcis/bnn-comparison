@@ -9,13 +9,13 @@ import matplotlib.pyplot as plt
 
 
 PERCENT_OF_MIXED_LABELS = 0
-BATCH_SIZE = 64
+BATCH_SIZE = 32
 TRAIN_TEST_SPLIT = 0.7
 LEARNING_RATE = 0.01
 NUMBER_OF_EPOCHS = 300
 HIDDEN_LAYER_NODES_1 = 50
-HIDDEN_LAYER_NODES_2 = 20
-HIDDEN_LAYER_NODES_3 = 10
+HIDDEN_LAYER_NODES_2 = 50
+HIDDEN_LAYER_NODES_3 = 20
 
 WEIGHT_OF_CROSS_ENTROPY_LOSS = 0.9
 WEIGHT_OF_KL_DIVERGENCE_LOSS = 0.1
@@ -43,6 +43,7 @@ class MushroomDataset(torch.utils.data.Dataset):
 
         # Encode x values
         data = data.drop(columns=[0])
+        data = data.drop([0])
         self.X = []
         self.inputSize = 0
         for column in data:
