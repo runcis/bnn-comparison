@@ -12,7 +12,7 @@ DRAWS = 1000
 PERCENT_OF_MIXED_LABELS = 0.3
 
 # Load the mushroom dataset
-data = pd.read_csv("../data/mushrooms.csv")
+data = pd.read_csv("./data/mushrooms.csv")
 
 # Set column names
 col_names = ['class', 'cap-shape', 'cap-surface', 'cap-color', 'bruises', 'odor', 'gill-attachment',

@@ -26,7 +26,7 @@ else:
     print('cpu')
 
 # Load the mushroom dataset
-data_path = "../data/mushrooms.csv"
+data_path = "./data/mushrooms.csv"
 
 class MushroomDataset(torch.utils.data.Dataset):
     def __init__(self, train=False):

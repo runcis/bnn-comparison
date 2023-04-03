@@ -22,7 +22,7 @@ WEIGHT_OF_KL_DIVERGENCE_LOSS = 0.1
 PRIOR_MU_FIRST_LAYER = 0
 PRIOR_MU_SECOND_LAYER = 0
 PRIOR_MU_THIRD_LAYER = 0
-PRIOR_MU_FORTH_LAYER = 0
+PRIOR_MU_FOURTH_LAYER = 0
 PRIOR_SIGMA_FIRST_LAYER = 0.01
 PRIOR_SIGMA_SECOND_LAYER = 0.01
 PRIOR_SIGMA_THIRD_LAYER = 0.01
@@ -30,7 +30,7 @@ PRIOR_SIGMA_FOURTH_LAYER = 0.01
 
 OUTPUT_DIMENSION = 2
 # Load the mushroom dataset
-data_path = "../data/mushrooms.csv"
+data_path = "./data/mushrooms.csv"
 
 class MushroomDataset(torch.utils.data.Dataset):
     def __init__(self, train=False):
