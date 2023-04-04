@@ -14,7 +14,7 @@ HIDDEN_LAYER_NODES_1 = 50
 HIDDEN_LAYER_NODES_2 = 20
 HIDDEN_LAYER_NODES_3 = 20
 
-NUMBER_OF_SAMPLE = 500
+SAMPLES = 500
 DROPOUT_RATE = 0.3
 
 OUTPUT_DIMENSION = 2 #don't change:
@@ -37,8 +37,10 @@ class MushroomDataset(torch.utils.data.Dataset):
         labelValues = pd.Categorical(data[0][1:]).codes
         self.y = torch.tensor(pd.get_dummies(labelValues).values, dtype=torch.float32)
 
-        # Encode x values
+        # Drop 1 column and 1 row (output class and labels)
         data = data.drop(columns=[0])
+        data = data.drop([0])
+        # Encode X values
         self.X = []
         self.inputSize = 0
         for column in data:
@@ -124,7 +126,7 @@ def evaluate(model, criterion, X_test, y_test):
 
     # Run model on a batch of inputs, NUMBER_OF_SAMPLE times
     outputs = []
-    for i in range(NUMBER_OF_SAMPLE):
+    for i in range(SAMPLES):
         output = model(X_test)
         outputs.append(output.cpu().detach().numpy())
     outputs = np.stack(outputs)

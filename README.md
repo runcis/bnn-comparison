@@ -1,7 +1,7 @@
 Repository contains the implementation of three BNN algorithms for the mushroom dataset - Bayes by backprop (BBB), Monte Carlo Dropout (MC-D), Variation Inference (VI).
 
 # Things to check:
-1. Kā embedding ir implemnetēts algoritmos:
+1. Kā embedding ir implementēts algoritmos:
 
 Dataset objektā katrai kategorijai tiek izveidots tensors.
 ~~~
@@ -28,7 +28,7 @@ def forward(self, x):
     return x
 ~~~
 
-2. Pašlaik BBB un MC-D implementācijas sasniedz tikai 70-80% accuracy - esmu mēģinot dažādus hiperparametru vērtīas, nespēju uzlabot algoritmus.
+2. Pašlaik BBB un MC-D implementācijas sasniedz ~70-90% accuracy un neuzlabojas to algoritmam ejot uz priekšu
 
 Novērotie rezultāti līdz šim:
 

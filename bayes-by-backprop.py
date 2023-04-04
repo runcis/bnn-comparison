@@ -8,25 +8,22 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-PERCENT_OF_MIXED_LABELS = 0
+PERCENT_OF_MIXED_LABELS = 0.2
 BATCH_SIZE = 32
 TRAIN_TEST_SPLIT = 0.7
 LEARNING_RATE = 0.01
 NUMBER_OF_EPOCHS = 300
 HIDDEN_LAYER_NODES_1 = 50
-HIDDEN_LAYER_NODES_2 = 50
+HIDDEN_LAYER_NODES_2 = 20
 HIDDEN_LAYER_NODES_3 = 20
 
 WEIGHT_OF_CROSS_ENTROPY_LOSS = 0.9
 WEIGHT_OF_KL_DIVERGENCE_LOSS = 0.1
 PRIOR_MU_FIRST_LAYER = 0
 PRIOR_MU_SECOND_LAYER = 0
-PRIOR_MU_THIRD_LAYER = 0
-PRIOR_MU_FOURTH_LAYER = 0
 PRIOR_SIGMA_FIRST_LAYER = 0.01
 PRIOR_SIGMA_SECOND_LAYER = 0.01
-PRIOR_SIGMA_THIRD_LAYER = 0.01
-PRIOR_SIGMA_FOURTH_LAYER = 0.01
+SAMPLES = 100
 
 OUTPUT_DIMENSION = 2
 # Load the mushroom dataset
@@ -41,9 +38,10 @@ class MushroomDataset(torch.utils.data.Dataset):
         labelValues = pd.Categorical(data[0][1:]).codes
         self.y = torch.tensor(pd.get_dummies(labelValues).values, dtype=torch.float32)
 
-        # Encode x values
+        # Drop 1 column and 1 row (output class and labels)
         data = data.drop(columns=[0])
         data = data.drop([0])
+        # Encode X values
         self.X = []
         self.inputSize = 0
         for column in data:
@@ -99,19 +97,13 @@ class BNN(nn.Module):
     def __init__(self, input_dim):
         super(BNN, self).__init__()
         self.fc1 = bnn.BayesLinear(prior_mu=PRIOR_MU_FIRST_LAYER, prior_sigma=PRIOR_SIGMA_FIRST_LAYER, in_features=input_dim, out_features=HIDDEN_LAYER_NODES_1)
-        self.fc2 = bnn.BayesLinear(prior_mu=PRIOR_MU_SECOND_LAYER, prior_sigma=PRIOR_SIGMA_SECOND_LAYER, in_features=HIDDEN_LAYER_NODES_1, out_features=HIDDEN_LAYER_NODES_2)
-        self.fc3 = bnn.BayesLinear(prior_mu=PRIOR_MU_THIRD_LAYER, prior_sigma=PRIOR_SIGMA_THIRD_LAYER, in_features=HIDDEN_LAYER_NODES_2, out_features=HIDDEN_LAYER_NODES_3)
-        self.fc4 = bnn.BayesLinear(prior_mu=PRIOR_MU_FOURTH_LAYER, prior_sigma=PRIOR_SIGMA_FOURTH_LAYER, in_features=HIDDEN_LAYER_NODES_3, out_features=OUTPUT_DIMENSION)
+        self.fc2 = bnn.BayesLinear(prior_mu=PRIOR_MU_SECOND_LAYER, prior_sigma=PRIOR_SIGMA_SECOND_LAYER, in_features=HIDDEN_LAYER_NODES_1, out_features=OUTPUT_DIMENSION)
 
     def forward(self, x):
         x = torch.cat(x, dim=1)
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
-        x = F.relu(x)
-        x = self.fc3(x)
-        x = F.relu(x)
-        x = self.fc4(x)
         return x
 
 
@@ -130,13 +122,27 @@ def train(model, optimizer, criterion, X_train, y_train):
 
 
 def evaluate(model, criterion, X_test, y_test):
-    output = model(X_test)
-    loss = criterion(output, y_test)
-    pred_max = torch.argmax(output, dim=1)
+    outputs = []
+    for i in range(SAMPLES):
+        output = model(X_test)
+        outputs.append(output)
+    outputs = torch.stack(outputs)
+    mean = outputs.mean(dim=0)
+    predictions, max_indices = torch.max(mean, dim=1)
+
+    # Variance calculation
+    variances = outputs.var(dim=0)
+    #prediction_variances = torch.gather(variances, dim=1, index=max_indices.unsqueeze(1))
+
+    # Loss calculation
+    loss = criterion(mean, y_test)
+
+    # Accuracy calculation
     actual_max = torch.argmax(y_test, dim=1)
-    correct_count = (pred_max == actual_max).sum().item()
+    correct_count = (max_indices == actual_max).sum().item()
     acc = correct_count / y_test.shape[0]
-    return loss.item(), acc
+
+    return acc, loss.item()
 
 
 # Set the model hyperparameters
@@ -173,6 +179,7 @@ for step in range(NUMBER_OF_EPOCHS):
         else:
             loss_plot_test.append(np.mean(losses))
             acc_plot_test.append(np.mean(accs))
+            #picp_plot_test.append(np.mean(picps))
 
     if step % 10 == 0:
         _, axes = plt.subplots(nrows=3, ncols=1, figsize=(10,10))
