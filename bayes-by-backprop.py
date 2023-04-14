@@ -6,14 +6,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
 import matplotlib.pyplot as plt
+import time
 
-
-PERCENT_OF_MIXED_LABELS = 0.2
-BATCH_SIZE = 32
-TRAIN_TEST_SPLIT = 0.7
-LEARNING_RATE = 0.01
-NUMBER_OF_EPOCHS = 300
-HIDDEN_LAYER_NODES_1 = 50
+PERCENT_OF_MIXED_LABELS = 0
+BATCH_SIZE = 64
+TRAIN_TEST_SPLIT = .8
+LEARNING_RATE = 0.001
+NUMBER_OF_EPOCHS = 101
+HIDDEN_LAYER_NODES_1 = 100
 HIDDEN_LAYER_NODES_2 = 20
 HIDDEN_LAYER_NODES_3 = 20
 
@@ -29,11 +29,29 @@ OUTPUT_DIMENSION = 2
 # Load the mushroom dataset
 data_path = "./data/mushrooms.csv"
 
+# initialize arrays for the train and test indices
+train_indices = np.array([], dtype=int)
+test_indices = np.array([], dtype=int)
+
+class_labels = pd.read_csv(data_path, header=None).drop([0])[0]
+num_test = int(round(len(class_labels) * (1 - TRAIN_TEST_SPLIT) * 0.5))
+# loop over the unique class labels
+for label in class_labels.unique():
+    # get the indices for the current class
+    class_indices = np.where(class_labels == label)[0]
+
+    # perform stratified sampling on the current class
+    np.random.seed(43)
+    test_indices = np.concatenate((test_indices, np.random.choice(class_indices, size=num_test, replace=False)))
+    train_indices = np.concatenate((train_indices, np.setdiff1d(class_indices, test_indices)))
+
+np.random.shuffle(test_indices)
+np.random.shuffle(train_indices)
+
 class MushroomDataset(torch.utils.data.Dataset):
     def __init__(self, train=False):
 
         data = pd.read_csv(data_path, header=None)
-
         # Encode y values
         labelValues = pd.Categorical(data[0][1:]).codes
         self.y = torch.tensor(pd.get_dummies(labelValues).values, dtype=torch.float32)
@@ -51,19 +69,21 @@ class MushroomDataset(torch.utils.data.Dataset):
             self.inputSize += len(data[column].unique())
 
         if train:
-            self.X = [x[:round(len(x) * TRAIN_TEST_SPLIT)] for x in self.X]
-            self.y = self.y[:round(len(self.y) * TRAIN_TEST_SPLIT)]
+            self.X = [tensor[train_indices] for tensor in self.X]
+            self.y = [self.y[i] for i in train_indices]
 
             # create a mask of indices to flip
             if (PERCENT_OF_MIXED_LABELS):
                 mask = np.random.choice(len(self.y), int(len(self.y) * PERCENT_OF_MIXED_LABELS), replace=False)
                 # flip the values at the selected indices
-                self.y[mask] = 1 - self.y[mask]
+                temp = np.array(self.y)
+                temp[mask] = 1 - temp[mask]
+                self.y = [tensor for tensor in temp]
             self.num_samples = len(self.y)
 
         else:
-            self.X = [x[round(len(x) * TRAIN_TEST_SPLIT):] for x in self.X]
-            self.y = self.y[round(len(self.y) * TRAIN_TEST_SPLIT):]
+            self.X = [tensor[test_indices] for tensor in self.X]
+            self.y = [self.y[i] for i in test_indices]
             self.num_samples = len(self.y)
 
     def __getitem__(self, index):
@@ -93,17 +113,21 @@ dataloader_test = torch.utils.data.DataLoader(
 )
 
 
+start_time = time.time()
 class BNN(nn.Module):
     def __init__(self, input_dim):
         super(BNN, self).__init__()
         self.fc1 = bnn.BayesLinear(prior_mu=PRIOR_MU_FIRST_LAYER, prior_sigma=PRIOR_SIGMA_FIRST_LAYER, in_features=input_dim, out_features=HIDDEN_LAYER_NODES_1)
-        self.fc2 = bnn.BayesLinear(prior_mu=PRIOR_MU_SECOND_LAYER, prior_sigma=PRIOR_SIGMA_SECOND_LAYER, in_features=HIDDEN_LAYER_NODES_1, out_features=OUTPUT_DIMENSION)
+
+        self.fc2 = bnn.BayesLinear(prior_mu=PRIOR_MU_SECOND_LAYER, prior_sigma=PRIOR_SIGMA_SECOND_LAYER,
+                               in_features=HIDDEN_LAYER_NODES_1, out_features=OUTPUT_DIMENSION)
 
     def forward(self, x):
         x = torch.cat(x, dim=1)
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
+        x = F.softmax(x, dim=-1)
         return x
 
 
@@ -121,6 +145,23 @@ def train(model, optimizer, criterion, X_train, y_train):
     return loss.item(), ce.item(), kl.item()
 
 
+def calculateAccuracy(max_indices, y_test):
+    # Accuracy calculation
+    actual_max = torch.argmax(y_test, dim=1)
+    correct_count = (max_indices == actual_max).sum().item()
+    accuracy = correct_count / y_test.shape[0]
+    return actual_max, accuracy
+
+
+def createConfusionMatrix(actual_max, max_indices):
+    confusion_matrix = np.zeros((2, 2))
+
+    # Populate the matrix with actual vs. predicted values
+    for a, p in zip(actual_max, max_indices):
+        confusion_matrix[a][p] += 1
+    return confusion_matrix
+
+
 def evaluate(model, criterion, X_test, y_test):
     outputs = []
     for i in range(SAMPLES):
@@ -130,19 +171,19 @@ def evaluate(model, criterion, X_test, y_test):
     mean = outputs.mean(dim=0)
     predictions, max_indices = torch.max(mean, dim=1)
 
-    # Variance calculation
     variances = outputs.var(dim=0)
-    #prediction_variances = torch.gather(variances, dim=1, index=max_indices.unsqueeze(1))
+    prediction_variances = torch.gather(variances, dim=1, index=max_indices.unsqueeze(1))
 
     # Loss calculation
     loss = criterion(mean, y_test)
 
     # Accuracy calculation
-    actual_max = torch.argmax(y_test, dim=1)
-    correct_count = (max_indices == actual_max).sum().item()
-    acc = correct_count / y_test.shape[0]
+    actual_max, accuracy = calculateAccuracy(max_indices, y_test)
 
-    return acc, loss.item()
+    # Create confusion matrix
+    confusion_matrix = createConfusionMatrix(actual_max, max_indices)
+
+    return accuracy, loss.item(), prediction_variances, confusion_matrix
 
 
 # Set the model hyperparameters
@@ -156,21 +197,27 @@ loss_plot_train = []
 loss_plot_test = []
 acc_plot_train = []
 acc_plot_test = []
+vars_plot_test = []
 for step in range(NUMBER_OF_EPOCHS):
     losses = []
     accs = []
     ce_loss = []
     kll = []
+    confusion_matrix = np.zeros((2, 2))
+    videjaVariance = 0
     for dataloader in [dataloader_train, dataloader_test]:
         losses = []
         accs = []
+        vars = []
         for x, y in dataloader:
 
             if dataloader == dataloader_train:
                 loss = train(model, optimizer, criterion, x, y)
             else:
-                acc, loss = evaluate(model, criterion, x, y)
+                acc, loss, var, matrix = evaluate(model, criterion, x, y)
+                confusion_matrix = confusion_matrix + matrix
                 accs.append(acc)
+                vars.append(torch.mean(var.float()).item())
 
             losses.append(loss)
 
@@ -179,33 +226,43 @@ for step in range(NUMBER_OF_EPOCHS):
         else:
             loss_plot_test.append(np.mean(losses))
             acc_plot_test.append(np.mean(accs))
-            #picp_plot_test.append(np.mean(picps))
+            vars_plot_test.append(np.mean(vars))
 
     if step % 10 == 0:
-        _, axes = plt.subplots(nrows=3, ncols=1, figsize=(10,10))
+        print('confusion matrix : ', confusion_matrix, )
+        _, axes = plt.subplots(nrows=4, ncols=1, figsize=(10,14))
         ax1 = axes[0]
-        ax1.set_title("Training loss")
-        ax1.plot(loss_plot_train, 'r-', label='train')
+        ax1.set_title("Apmācības kļūda")
+        ax1.plot(loss_plot_train, 'r-')
         ax1.legend()
-        ax1.set_ylabel("loss")
+        ax1.set_ylabel("kļūda")
 
         ax1 = axes[1]
-        ax1.set_title("Testing Loss")
-        ax1.plot(loss_plot_test, 'r-', label='test')
+        ax1.set_title("Testēšanas kļūda")
+        ax1.plot(loss_plot_test, 'r-')
         ax1.legend()
-        ax1.set_ylabel("loss.")
+        ax1.set_ylabel("kļūda")
 
         ax1 = axes[2]
-        ax1.set_title("Accuracy")
-        ax1.plot(acc_plot_test, 'g-', label='test')
+        ax1.set_title("Testēšanas rezultātu vidējā dispersija")
+        ax1.plot(vars_plot_test, 'b-')
         ax1.legend()
-        ax1.set_ylabel("Accuracy")
+        ax1.set_ylabel("dispersija")
 
-        ax1.set_xlabel("Epoch")
+        ax1 = axes[3]
+        ax1.set_title("Testēšanas pareizi kategorizētie ieraksti")
+
+        ax1.plot(acc_plot_test, 'g-')
+        ax1.legend()
+        ax1.set_ylabel("Precizitāte")
+
+        ax1.set_xlabel("Cikls")
         plt.subplots_adjust(hspace=0.5)
         plt.show()
-        print('Step: ', step, 'got accuracy: ', acc_plot_test[-1])
+        print('Step: ', step, 'got accuracy: ', acc_plot_test[-1], 'got variance: ', vars_plot_test[-1])
+        print("--- %s seconds ---" % (time.time() - start_time))
 
 
 
-print('BBB: mixed labels: ',PERCENT_OF_MIXED_LABELS, 'got accuracy: ', acc_plot_test[-1])
+print('BBB: mixed labels: ',PERCENT_OF_MIXED_LABELS, 'got accuracy: ', acc_plot_test[-1],
+      acc_plot_test[-1], 'got variance: ', vars_plot_test[-1])
