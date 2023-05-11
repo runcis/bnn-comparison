@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import time
 
 PERCENT_OF_MIXED_LABELS = 0
+PERCENT_OF_MIXED_PARAMETERS = 0
 BATCH_SIZE = 64
 TRAIN_TEST_SPLIT = .8
 LEARNING_RATE = 0.001
@@ -71,15 +72,23 @@ class MushroomDataset(torch.utils.data.Dataset):
         if train:
             self.X = [tensor[train_indices] for tensor in self.X]
             self.y = [self.y[i] for i in train_indices]
+            self.num_samples = len(self.y)
 
             # create a mask of indices to flip
             if (PERCENT_OF_MIXED_LABELS):
-                mask = np.random.choice(len(self.y), int(len(self.y) * PERCENT_OF_MIXED_LABELS), replace=False)
+                mask = np.random.choice(self.num_samples, int(self.num_samples * PERCENT_OF_MIXED_LABELS), replace=False)
                 # flip the values at the selected indices
                 temp = np.array(self.y)
                 temp[mask] = 1 - temp[mask]
                 self.y = [tensor for tensor in temp]
-            self.num_samples = len(self.y)
+
+            if (PERCENT_OF_MIXED_PARAMETERS):
+                mask = np.random.choice(self.num_samples, int(self.num_samples * PERCENT_OF_MIXED_PARAMETERS), replace=False)
+
+                for id in mask:
+                    featureId = np.random.randint(0, 21)
+                    tensorToChange = self.X[featureId][id]
+                    self.X[featureId][id] = torch.roll(tensorToChange, shifts=torch.randint(0, len(tensorToChange), (1,)).item())
 
         else:
             self.X = [tensor[test_indices] for tensor in self.X]
@@ -162,34 +171,18 @@ def createConfusionMatrix(actual_max, max_indices):
     return confusion_matrix
 
 
-def evaluate(model, criterion, X_test, y_test):
+def evaluate(model, X_test):
     outputs = []
     for i in range(SAMPLES):
         output = model(X_test)
         outputs.append(output)
-    outputs = torch.stack(outputs)
-    mean = outputs.mean(dim=0)
-    predictions, max_indices = torch.max(mean, dim=1)
-
-    variances = outputs.var(dim=0)
-    prediction_variances = torch.gather(variances, dim=1, index=max_indices.unsqueeze(1))
-
-    # Loss calculation
-    loss = criterion(mean, y_test)
-
-    # Accuracy calculation
-    actual_max, accuracy = calculateAccuracy(max_indices, y_test)
-
-    # Create confusion matrix
-    confusion_matrix = createConfusionMatrix(actual_max, max_indices)
-
-    return accuracy, loss.item(), prediction_variances, confusion_matrix
+    return torch.stack(outputs)
 
 
 # Set the model hyperparameters
 model = BNN(train_dataset.inputSize)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-criterion = nn.CrossEntropyLoss()
+criterion = nn.BCELoss()
 
 # Train the model with BBB
 
@@ -205,6 +198,9 @@ for step in range(NUMBER_OF_EPOCHS):
     kll = []
     confusion_matrix = np.zeros((2, 2))
     videjaVariance = 0
+    test_predictions = torch.tensor([])
+    test_true_values = torch.tensor([])
+
     for dataloader in [dataloader_train, dataloader_test]:
         losses = []
         accs = []
@@ -214,10 +210,27 @@ for step in range(NUMBER_OF_EPOCHS):
             if dataloader == dataloader_train:
                 loss = train(model, optimizer, criterion, x, y)
             else:
-                acc, loss, var, matrix = evaluate(model, criterion, x, y)
-                confusion_matrix = confusion_matrix + matrix
-                accs.append(acc)
-                vars.append(torch.mean(var.float()).item())
+                outputs = evaluate(model, x)
+
+                mean = outputs.mean(dim=0)
+                predictions, max_indices = torch.max(mean, dim=1)
+
+                variances = outputs.var(dim=0)
+                prediction_variances = torch.gather(variances, dim=1, index=max_indices.unsqueeze(1))
+
+                # Loss calculation
+                loss = criterion(mean, y).item()
+
+                # Accuracy calculation
+                actual_max, accuracy = calculateAccuracy(max_indices, y)
+
+                test_predictions = torch.cat((test_predictions, mean.reshape(-1)))
+                test_true_values = torch.cat((test_true_values, y.reshape(-1)))
+
+                confusion_matrix = confusion_matrix + createConfusionMatrix(actual_max, max_indices)
+
+                accs.append(accuracy)
+                vars.append(torch.mean(prediction_variances.float()).item())
 
             losses.append(loss)
 
@@ -263,6 +276,5 @@ for step in range(NUMBER_OF_EPOCHS):
         print("--- %s seconds ---" % (time.time() - start_time))
 
 
-
-print('BBB: mixed labels: ',PERCENT_OF_MIXED_LABELS, 'got accuracy: ', acc_plot_test[-1],
+print('BBB: mixed labels: ',PERCENT_OF_MIXED_LABELS,'BBB: mixed parameters: ',PERCENT_OF_MIXED_PARAMETERS, 'got accuracy: ', acc_plot_test[-1],
       acc_plot_test[-1], 'got variance: ', vars_plot_test[-1])

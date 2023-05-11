@@ -7,7 +7,8 @@ import torch.nn.functional as F
 import pandas as pd
 import matplotlib.pyplot as plt
 
-PERCENT_OF_MIXED_LABELS = 0.4
+PERCENT_OF_MIXED_LABELS = 0
+PERCENT_OF_MIXED_PARAMETERS = 0
 BATCH_SIZE = 64
 TRAIN_TEST_SPLIT = 0.8
 LEARNING_RATE = 0.01
@@ -68,15 +69,23 @@ class MushroomDataset(torch.utils.data.Dataset):
         if train:
             self.X = [tensor[train_indices] for tensor in self.X]
             self.y = [self.y[i] for i in train_indices]
+            self.num_samples = len(self.y)
 
             # create a mask of indices to flip
-            if PERCENT_OF_MIXED_LABELS > 0:
-                mask = np.random.choice(len(self.y), int(len(self.y) * PERCENT_OF_MIXED_LABELS), replace=False)
+            if (PERCENT_OF_MIXED_LABELS):
+                mask = np.random.choice(self.num_samples, int(self.num_samples * PERCENT_OF_MIXED_LABELS), replace=False)
                 # flip the values at the selected indices
                 temp = np.array(self.y)
                 temp[mask] = 1 - temp[mask]
                 self.y = [tensor for tensor in temp]
-            self.num_samples = len(self.y)
+
+            if PERCENT_OF_MIXED_PARAMETERS:
+                mask = np.random.choice(self.num_samples, int(self.num_samples * PERCENT_OF_MIXED_PARAMETERS), replace=False)
+
+                for id in mask:
+                    featureId = np.random.randint(0, 21)
+                    tensorToChange = self.X[featureId][id]
+                    self.X[featureId][id] = torch.roll(tensorToChange, shifts=torch.randint(0, len(tensorToChange), (1,)).item())
 
         else:
             self.X = [tensor[test_indices] for tensor in self.X]
@@ -91,8 +100,6 @@ class MushroomDataset(torch.utils.data.Dataset):
         # return the total number of samples in the dataset
         return self.num_samples
 
-
-mushroom_data = pd.read_csv(data_path)
 
 train_dataset = MushroomDataset(train=True)
 test_dataset = MushroomDataset(train=False)
@@ -157,8 +164,22 @@ def createConfusionMatrix(actual_max, max_indices):
     return confusion_matrix
 
 
+def reliability_curve(y_true, y_prob, n_bins):
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    bin_indices = np.digitize(y_prob, bin_edges) - 1
+    bin_sums = np.bincount(bin_indices, minlength=n_bins, weights=y_prob)
+    bin_true = np.bincount(bin_indices, minlength=n_bins, weights=y_true)
+    bin_total = np.bincount(bin_indices, minlength=n_bins)
 
-def evaluate(model, criterion, X_test, y_test):
+    nonzero = bin_total != 0
+    observed_frequency = np.divide(bin_true[nonzero], bin_total[nonzero], out=np.zeros_like(bin_true[nonzero]),
+                                   where=bin_total[nonzero] != 0)
+    mean_predicted_probability = np.divide(bin_sums[nonzero], bin_total[nonzero], out=np.zeros_like(bin_sums[nonzero]),
+                                           where=bin_total[nonzero] != 0)
+
+    return mean_predicted_probability, observed_frequency
+
+def evaluate(model, X_test):
     model.eval()
 
     # Run model on a batch of inputs, NUMBER_OF_SAMPLE times
@@ -166,33 +187,12 @@ def evaluate(model, criterion, X_test, y_test):
     for i in range(SAMPLES):
         output = model(X_test)
         outputs.append(output.detach().numpy())
-    outputs = np.stack(outputs)
-
-    # Create tensor from mean of samples
-    mean_output = torch.tensor(np.mean(outputs, axis=0), dtype=torch.float32)
-
-    # Calculate variance from samples
-    var_output = np.var(outputs, axis=0)
-    max_indices = torch.argmax(mean_output, dim=1)
-    var_output = var_output[torch.arange(var_output.shape[0]), max_indices]
-
-    # Calculate loss
-    loss = criterion(mean_output, y_test)
-
-
-    # Accuracy calculation
-    actual_max, accuracy = calculateAccuracy(max_indices, y_test)
-
-    # Create confusion matrix
-    confusion_matrix = createConfusionMatrix(actual_max, max_indices)
-
-    return accuracy , loss, var_output, confusion_matrix
-
+    return np.stack(outputs)
 
 # Initialize the model and optimizer
 model = BNN(train_dataset.inputSize)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-criterion = nn.CrossEntropyLoss()
+criterion = nn.BCELoss()
 
 # Train the model with Monte Carlo Dropout
 
@@ -209,15 +209,37 @@ for step in range(NUMBER_OF_EPOCHS):
         accs = []
         vars = []
         confusion_matrix = np.zeros((2, 2))
+        test_predictions = torch.tensor([])
+        test_true_values = torch.tensor([])
+
         for x , y in dataloader:
 
             if dataloader == dataloader_train:
                 loss = train(model, optimizer, criterion, x, y)
             else:
-                acc, loss, var, matrix = evaluate(model, criterion, x, y)
-                confusion_matrix = confusion_matrix + matrix
-                accs.append(acc)
-                vars.append(np.mean(var))
+                outputs = evaluate(model, x)
+
+                # Create tensor from mean of samples
+                mean_output = torch.tensor(np.mean(outputs, axis=0), dtype=torch.float32)
+
+                # Calculate variance from samples
+                var_output = np.var(outputs, axis=0)
+                max_indices = torch.argmax(mean_output, dim=1)
+                var_output = var_output[torch.arange(var_output.shape[0]), max_indices]
+
+                test_predictions = torch.cat((test_predictions, mean_output.reshape(-1)))
+                test_true_values = torch.cat((test_true_values, y.reshape(-1)))
+
+                # Calculate loss
+                loss = criterion(mean_output, y)
+
+                # Accuracy calculation
+                actual_max, accuracy = calculateAccuracy(max_indices, y)
+
+
+                confusion_matrix = confusion_matrix + createConfusionMatrix(actual_max, max_indices)
+                accs.append(accuracy)
+                vars.append(np.mean(var_output))
 
             losses.append(loss)
 
@@ -260,6 +282,18 @@ for step in range(NUMBER_OF_EPOCHS):
         plt.subplots_adjust(hspace=0.5)
         plt.show()
         print('Step: ', step, 'got accuracy: ', acc_plot_test[-1], 'got variance: ', vars_plot_test[-1])
+
+
+        # mean_predicted_prob, observed_freq = reliability_curve(test_true_values.tolist(), test_predictions.tolist(), n_bins=20)
+        #
+        # plt.figure(figsize=(8, 8))
+        # plt.plot(mean_predicted_prob, observed_freq, 'o-', label='Modelis')
+        # plt.plot([0, 1], [0, 1], '--', label='Perfekti kalibrēts', color='gray')
+        # plt.xlabel('Vidējā sagaidāmā varbūtība')
+        # plt.ylabel('Novērotā frekvence')
+        # plt.legend(loc='best')
+        # plt.title('Uzticamības diagramma')
+        # plt.show()
 
         print("--- %s seconds ---" % (time.time() - start_time))
 
